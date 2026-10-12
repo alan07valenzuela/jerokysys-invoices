@@ -31,6 +31,7 @@ import jakarta.persistence.EntityManager;
 import lombok.Getter;
 
 @Service
+@Transactional(readOnly = true)
 public class InvoiceService extends AbstractBaseService<Invoice, InvoiceDTO, PagedFilter> {
 
     private static final Pattern INVOICE_NUMBER = Pattern.compile("^\\d{3}-\\d{3}-\\d{7}$");
@@ -158,6 +159,21 @@ public class InvoiceService extends AbstractBaseService<Invoice, InvoiceDTO, Pag
         Pageable pageable = buildPageable(filter);
         Page<Invoice> page = invoiceRepo.findAll(pageable);
         return toPageResult(toPageDto(page));
+    }
+
+    @Override
+    public List<InvoiceDTO> getAll() {
+        return super.getAll();
+    }
+
+    @Override
+    public InvoiceDTO getById(Long id) {
+        return super.getById(id);
+    }
+
+    @Override
+    public PageResult<InvoiceDTO> getByFilter(PagedFilter filter) {
+        return super.getByFilter(filter);
     }
 
     @Override
