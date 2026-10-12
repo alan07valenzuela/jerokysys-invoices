@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Configuracion de Logback para MS2 - Cobro de Facturas.
+
+    Consola + archivo con rotacion por tamaño y por dia.
+    Todos los valores vienen de application.properties, nada esta fijo aca.
+
+    Niveles por capa (definidos en application.properties > logging.level):
+      controller -> INFO  peticiones entrantes
+      service    -> INFO  pasos de la logica de negocio
+      repository -> DEBUG consultas importantes (org.hibernate.SQL)
+-->
+<configuration>
+
+    <springProperty scope="context" name="logDir" source="app.logging.dir" defaultValue="logs"/>
+    <springProperty scope="context" name="logFile" source="app.logging.file" defaultValue="facturacion"/>
+    <springProperty scope="context" name="maxFileSize" source="app.logging.max-size" defaultValue="10MB"/>
+    <springProperty scope="context" name="maxHistory" source="app.logging.max-history" defaultValue="30"/>
+    <springProperty scope="context" name="totalSizeCap" source="app.logging.total-size-cap" defaultValue="1GB"/>
+
+    <property name="CONSOLE_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{36}) - %msg%n"/>
+    <property name="FILE_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
+
+    <!-- ============================ CONSOLA ============================ -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ======================= ARCHIVO CON ROTACION ==================== -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${logDir}/${logFile}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${logDir}/${logFile}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>${maxFileSize}</maxFileSize>
+            <maxHistory>${maxHistory}</maxHistory>
+            <totalSizeCap>${totalSizeCap}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ==================== ASYNC: no bloquea la request ============== -->
+    <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>2048</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+        <appender-ref ref="FILE"/>
+    </appender>
+
+    <root level="${LOG_LEVEL:-INFO}">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_FILE"/>
+    </root>
+
+</configuration>

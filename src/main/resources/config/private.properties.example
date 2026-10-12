@@ -1,0 +1,10 @@
+# Credenciales de la base de datos compartida de JerokySys.
+# Copiar este archivo a `private.properties` y completar los valores.
+# `private.properties` esta en .gitignore, asi que no se versiona.
+# OJO: hoy si se copia a target/classes y viaja dentro del JAR. Si el artefacto se
+# publica en algun registro, hay que excluirlo desde el bloque <resources> del pom.
+
+# URL JDBC completa de la base compartida por todos los microservicios.
+db.url=jdbc:postgresql://<host>:<port>/<database>
+db.username=<usuario>
+db.password=<password>

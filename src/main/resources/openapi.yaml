@@ -1,0 +1,857 @@
+openapi: 3.0.3
+
+info:
+  title: JerokySys - MS2 Cobro de Facturas
+  description: |
+    Microservicio de cobro del sistema JerokySys. Es dueño de `Invoice`, `InvoiceDetail`
+    y de los enumerados `InvoiceStatus` y `SaleCondition`.
+
+    Las entidades, los DTOs de entidad y las clases base provienen del JAR `commons`
+    (Entrega #1). Este servicio los consume sin modificarlos.
+
+    **Student** (MS Personas) y **Enrollment** / `Exam` (MS3) son entidades externas:
+    solo se referencian por identificador, este servicio nunca lee sus tablas. Por eso
+    `studentId` se resuelve con un proxy de JPA y es la base de datos la que valida
+    que el alumno exista.
+
+    Los controllers se escriben a mano contra `commons` (`BaseController`,
+    `AbstractBaseService`) y este archivo documenta el contrato: no se genera codigo
+    desde el.
+
+  version: 1.0.0
+  contact:
+    name: MS2 - Cobro de Facturas
+
+servers:
+  - url: http://localhost:8083
+    description: Local
+
+tags:
+  - name: Invoice
+    description: Cabecera de factura. Titulos fiscales, condicion de venta y estado de pago.
+  - name: InvoiceDetail
+    description: Lineas de detalle de la factura. Solo lectura; se escriben dentro de la factura.
+
+# ==============================================================================
+# Rutas.
+#
+# Todos los endpoints devuelven el sobre `Response<T>` de commons
+# ({ data, message, status, success }) y las lecturas paginadas usan
+# `Response<PageResult<T>>`. Los endpoints de filtro devuelven
+# `Response<List<T>>` sin paginar, igual que en academic.
+# ==============================================================================
+paths:
+
+  # ==========================================================================
+  # FACTURAS
+  # ==========================================================================
+  /invoices:
+    get:
+      tags: [Invoice]
+      summary: Lista facturas, paginadas
+      description: Devuelve una pagina de facturas sin cargar sus lineas de detalle.
+      operationId: listInvoices
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/SortParam'
+        - $ref: '#/components/parameters/DirectionParam'
+      responses:
+        '200':
+          description: Pagina de facturas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoicePage'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [Invoice]
+      summary: Registra una factura
+      description: |
+        Crea la factura junto con sus lineas de detalle.
+
+        El servidor ignora los valores de `totalAmount` y `totalIva` que envien: los
+        recalcula siempre sumando los importes de `details`, con
+        `totalIva = sum(amount * vatRate / 100)`.
+
+        Una factura sin lineas se rechaza, y un `invoiceNumber` con formato invalido o
+        ya usado tambien. La cabecera y las lineas se guardan en una sola transaccion.
+      operationId: createInvoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoiceDTO'
+      responses:
+        '201':
+          description: Factura creada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoice'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdParam'
+    get:
+      tags: [Invoice]
+      summary: Obtiene una factura por id
+      description: Devuelve la factura con todas sus lineas de detalle.
+      operationId: getInvoiceById
+      responses:
+        '200':
+          description: Factura encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoice'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    put:
+      tags: [Invoice]
+      summary: Actualiza una factura
+      description: |
+        Reemplaza las lineas de detalle por las que envie el cuerpo y recalcula los
+        totales. Si `details` viene nulo, conserva las lineas existentes.
+
+        `studentId`, `invoiceNumber`, `totalAmount`, `totalIva` y `paymentStatus` no se
+        tocan si vienen nulos.
+      operationId: updateInvoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoiceDTO'
+      responses:
+        '200':
+          description: Factura actualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoice'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    delete:
+      tags: [Invoice]
+      summary: Anula logicamente una factura
+      description: |
+        Borrado logico heredado de `AbstractBaseService`: la fila queda con
+        `active = false` y `deleted = true`, nunca se borra fisicamente. Solo actua
+        sobre la cabecera.
+      operationId: deleteInvoice
+      responses:
+        '204':
+          description: Factura anulada logicamente. Sin cuerpo.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/{id}/status:
+    parameters:
+      - $ref: '#/components/parameters/IdParam'
+    patch:
+      tags: [Invoice]
+      summary: Cambia el estado de pago de la factura
+      description: |
+        Transiciones validas: `PENDING` a `PAID` y `PENDING` a `CANCELLED`.
+        `PAID` y `CANCELLED` son estados finales, no hay retroceso, y pedir `PENDING`
+        como destino es un error de validacion.
+      operationId: changeInvoiceStatus
+      parameters:
+        - name: status
+          in: query
+          required: true
+          description: Nuevo estado de pago.
+          schema: { $ref: '#/components/schemas/InvoiceStatus' }
+          example: PAID
+      responses:
+        '200':
+          description: Estado actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoice'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # --------------------------------------------------------------------------
+  # Filtros. Uno por endpoint, cada uno con un unico parametro, al estilo de
+  # academic (`/by-student`, `/by-status`, `/by-date`...). No se combinan entre si.
+  # --------------------------------------------------------------------------
+  /invoices/by-student/{studentId}:
+    get:
+      tags: [Invoice]
+      summary: Facturas de un estudiante
+      operationId: getInvoicesByStudent
+      parameters:
+        - name: studentId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Facturas del estudiante.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/by-status:
+    get:
+      tags: [Invoice]
+      summary: Facturas por estado de pago
+      operationId: getInvoicesByStatus
+      parameters:
+        - name: status
+          in: query
+          required: true
+          schema: { type: string }
+          example: PAID
+      responses:
+        '200':
+          description: Facturas en ese estado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/by-sale-condition:
+    get:
+      tags: [Invoice]
+      summary: Facturas por condicion de venta
+      operationId: getInvoicesBySaleCondition
+      parameters:
+        - name: condition
+          in: query
+          required: true
+          schema: { type: string }
+          example: CREDITO
+      responses:
+        '200':
+          description: Facturas con esa condicion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/by-number:
+    get:
+      tags: [Invoice]
+      summary: Facturas por numero fiscal exacto
+      operationId: getInvoicesByNumber
+      parameters:
+        - name: invoiceNumber
+          in: query
+          required: true
+          schema: { type: string, maxLength: 20 }
+          example: 001-001-0000123
+      responses:
+        '200':
+          description: Facturas con ese numero.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/by-timbrado:
+    get:
+      tags: [Invoice]
+      summary: Facturas por numero de timbrado
+      operationId: getInvoicesByTimbrado
+      parameters:
+        - name: timbrado
+          in: query
+          required: true
+          schema: { type: string, maxLength: 20 }
+          example: '001'
+      responses:
+        '200':
+          description: Facturas de ese timbrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/by-tax-id:
+    get:
+      tags: [Invoice]
+      summary: Facturas por RUC del cliente
+      operationId: getInvoicesByTaxId
+      parameters:
+        - name: taxId
+          in: query
+          required: true
+          schema: { type: string, maxLength: 20 }
+          example: '20123456789'
+      responses:
+        '200':
+          description: Facturas de ese cliente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/by-date:
+    get:
+      tags: [Invoice]
+      summary: Facturas emitidas en una fecha exacta
+      operationId: getInvoicesByDate
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          example: '2026-03-01'
+      responses:
+        '200':
+          description: Facturas de esa fecha.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/by-date-range:
+    get:
+      tags: [Invoice]
+      summary: Facturas emitidas en un rango de fechas
+      operationId: getInvoicesByDateRange
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          example: '2026-01-01'
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          example: '2026-03-31'
+      responses:
+        '200':
+          description: Facturas del rango, inclusive en los extremos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/by-amount-range:
+    get:
+      tags: [Invoice]
+      summary: Facturas por rango de importe total
+      operationId: getInvoicesByAmountRange
+      parameters:
+        - name: min
+          in: query
+          required: true
+          schema: { type: number }
+          example: 100
+        - name: max
+          in: query
+          required: true
+          schema: { type: number }
+          example: 500
+      responses:
+        '200':
+          description: Facturas del rango, inclusive en los extremos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoices/search-by-business-name:
+    get:
+      tags: [Invoice]
+      summary: Facturas por coincidencia parcial en la razon social
+      operationId: searchInvoicesByBusinessName
+      parameters:
+        - name: businessName
+          in: query
+          required: true
+          description: Substring, sin distinguir mayusculas.
+          schema: { type: string }
+          example: Perez
+      responses:
+        '200':
+          description: Facturas que coinciden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ==========================================================================
+  # LINEAS DE DETALLE (solo lectura)
+  # ==========================================================================
+  /invoice-details:
+    get:
+      tags: [InvoiceDetail]
+      summary: Lista lineas de detalle, paginadas
+      operationId: listInvoiceDetails
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/SortParam'
+        - $ref: '#/components/parameters/DirectionParam'
+      responses:
+        '200':
+          description: Pagina de lineas de detalle.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceDetailPage'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoice-details/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdParam'
+    get:
+      tags: [InvoiceDetail]
+      summary: Obtiene una linea de detalle por id
+      operationId: getInvoiceDetailById
+      responses:
+        '200':
+          description: Linea encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceDetail'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoice-details/by-invoice/{invoiceId}:
+    get:
+      tags: [InvoiceDetail]
+      summary: Lineas de una factura
+      operationId: getInvoiceDetailsByInvoice
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Lineas de la factura.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceDetailList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoice-details/by-month:
+    get:
+      tags: [InvoiceDetail]
+      summary: Lineas imputadas a un mes
+      operationId: getInvoiceDetailsByMonth
+      parameters:
+        - name: month
+          in: query
+          required: true
+          description: Mes de imputacion, formato `AAAA-MM`.
+          schema: { type: string, maxLength: 20 }
+          example: '2026-03'
+      responses:
+        '200':
+          description: Lineas de ese mes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceDetailList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoice-details/by-vat-rate:
+    get:
+      tags: [InvoiceDetail]
+      summary: Lineas por tasa de IVA
+      operationId: getInvoiceDetailsByVatRate
+      parameters:
+        - name: vatRate
+          in: query
+          required: true
+          description: 'Porcentaje de IVA. `0` significa exento.'
+          schema: { type: integer, format: int32 }
+          example: 10
+      responses:
+        '200':
+          description: Lineas con esa tasa.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceDetailList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoice-details/by-concept:
+    get:
+      tags: [InvoiceDetail]
+      summary: Lineas que apuntan a un concepto facturado
+      description: |
+        Busca por el token que viaja dentro de `description`, por ejemplo
+        `[MATRICULA#12]`. El esquema compartido no tiene columnas `enrollment_id` ni
+        `exam_id`, asi que el concepto se referencia por ese token.
+      operationId: getInvoiceDetailsByConcept
+      parameters:
+        - name: conceptType
+          in: query
+          required: true
+          schema: { type: string, enum: [MATRICULA, EXAMEN] }
+        - name: conceptId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Lineas del concepto.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceDetailList'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoice-details/by-amount-range:
+    get:
+      tags: [InvoiceDetail]
+      summary: Lineas por rango de importe
+      operationId: getInvoiceDetailsByAmountRange
+      parameters:
+        - name: min
+          in: query
+          required: true
+          schema: { type: number }
+        - name: max
+          in: query
+          required: true
+          schema: { type: number }
+      responses:
+        '200':
+          description: Lineas del rango, inclusive en los extremos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceDetailList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /invoice-details/search-by-description:
+    get:
+      tags: [InvoiceDetail]
+      summary: Lineas por coincidencia parcial en la descripcion
+      operationId: searchInvoiceDetailsByDescription
+      parameters:
+        - name: description
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Lineas que coinciden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceDetailList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+# ==============================================================================
+components:
+
+  parameters:
+    IdParam:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    PageParam:
+      name: page
+      in: query
+      description: Indice de pagina, empieza en 0.
+      schema: { type: integer, default: 0, minimum: 0 }
+    SizeParam:
+      name: size
+      in: query
+      description: Elementos por pagina.
+      schema: { type: integer, default: 10, minimum: 1 }
+    SortParam:
+      name: sort
+      in: query
+      description: Campo por el que se ordena.
+      schema: { type: string, default: id }
+    DirectionParam:
+      name: direction
+      in: query
+      description: Sentido del orden.
+      schema: { type: string, default: ASC, enum: [ASC, DESC] }
+
+  responses:
+    BadRequest:
+      description: |
+        Peticion invalida o fallo de validacion.
+
+        El `GlobalExceptionHandler` de `commons` traduce **toda** `BusinessException` a
+        HTTP 400, sin distinguir el `errorCode` (`ENTITY_NOT_FOUND`, `CONFLICT`,
+        `VALIDATION_ERROR`, `STUDENT_NOT_FOUND`), y tampoco serializa ese codigo en el
+        cuerpo. Es el mismo comportamiento que en `academic`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResponseError'
+    InternalError:
+      description: Error interno. El detalle tecnico queda en el log del servidor.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ResponseError'
+
+  schemas:
+
+    # ==========================================================================
+    # ENVOLTORIO (de commons)
+    # ==========================================================================
+    ResponseError:
+      type: object
+      description: Sobre de error, con `data` nulo.
+      properties:
+        data: { nullable: true }
+        message: { type: string, example: Invoice not found with id: 999 }
+        status: { type: integer, example: 400 }
+        success: { type: boolean, example: false }
+
+    ResponseInvoice:
+      type: object
+      description: Sobre con una factura.
+      properties:
+        data: { $ref: '#/components/schemas/InvoiceDTO' }
+        message: { type: string, example: Success }
+        status: { type: integer, example: 200 }
+        success: { type: boolean, example: true }
+
+    ResponseInvoiceList:
+      type: object
+      description: Sobre con una lista de facturas sin paginar.
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/InvoiceDTO' }
+        message: { type: string }
+        status: { type: integer }
+        success: { type: boolean }
+
+    ResponseInvoicePage:
+      type: object
+      properties:
+        data: { $ref: '#/components/schemas/PageResultInvoice' }
+        message: { type: string }
+        status: { type: integer }
+        success: { type: boolean }
+
+    PageResultInvoice:
+      type: object
+      description: Sobre de paginacion (`commons.common.PageResult`).
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/InvoiceDTO' }
+        totalElements: { type: integer, format: int64, example: 137 }
+        totalPages: { type: integer, format: int32, example: 14 }
+        page: { type: integer, format: int32, example: 0 }
+        size: { type: integer, format: int32, example: 10 }
+
+    ResponseInvoiceDetail:
+      type: object
+      properties:
+        data: { $ref: '#/components/schemas/InvoiceDetailDTO' }
+        message: { type: string }
+        status: { type: integer }
+        success: { type: boolean }
+
+    ResponseInvoiceDetailList:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/InvoiceDetailDTO' }
+        message: { type: string }
+        status: { type: integer }
+        success: { type: boolean }
+
+    ResponseInvoiceDetailPage:
+      type: object
+      properties:
+        data: { $ref: '#/components/schemas/PageResultInvoiceDetail' }
+        message: { type: string }
+        status: { type: integer }
+        success: { type: boolean }
+
+    PageResultInvoiceDetail:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/InvoiceDetailDTO' }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer, format: int32 }
+        page: { type: integer, format: int32 }
+        size: { type: integer, format: int32 }
+
+    # ==========================================================================
+    # ENUMERADOS (del JAR de commons)
+    # ==========================================================================
+    InvoiceStatus:
+      type: string
+      description: Estado del pago de la factura
+      enum:
+        - PENDING
+        - PAID
+        - CANCELLED
+
+    SaleCondition:
+      type: string
+      description: Condicion de venta pactada con el cliente
+      enum:
+        - CONTADO
+        - CREDITO
+
+    # ==========================================================================
+    # DTOs DE ENTIDAD (del JAR de commons)
+    # ==========================================================================
+    InvoiceDetailDTO:
+      type: object
+      description: |
+        Linea de detalle de una factura.
+
+        La referencia al concepto facturado viaja dentro de `description` con un token
+        entre corchetes al final (`[MATRICULA#12]` o `[EXAMEN#45]`), porque el esquema
+        compartido no tiene columnas `enrollment_id` ni `exam_id`.
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+
+        invoiceId:
+          type: integer
+          format: int64
+          description: Factura a la que pertenece la linea
+
+        description:
+          type: string
+          maxLength: 255
+          description: Concepto facturado. Si referencia una matricula o un examen, debe incluir el token entre corchetes.
+
+        amount:
+          type: number
+          description: |
+            Base imponible de la linea. El IVA se calcula como
+            `amount * vatRate / 100`.
+
+        vatRate:
+          type: integer
+          format: int32
+          description: Porcentaje de IVA aplicado. `0` significa exento.
+          example: 10
+
+        correspondingMonth:
+          type: string
+          maxLength: 20
+          description: Mes al que se imputa el cargo, en formato `AAAA-MM`.
+          example: '2026-03'
+
+      required:
+        - description
+        - amount
+
+    InvoiceDTO:
+      type: object
+      description: |
+        Factura. El servidor siempre recalcula `totalAmount` y `totalIva` a partir de
+        `details`: los valores que envie el cliente se ignoran.
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+
+        studentId:
+          type: integer
+          format: int64
+          description: |
+            Estudiante facturado. Referencia externa a MS Personas: el servicio no lee
+            la tabla `students`, solo escribe el identificador y deja que la FK lo
+            valide.
+
+        timbrado:
+          type: string
+          maxLength: 20
+          description: Numero de timbrado del establecimiento emisor.
+          example: '001'
+
+        invoiceNumber:
+          type: string
+          maxLength: 20
+          description: |
+            Numero correlativo de la factura, con formato
+            `timbrado-serie-correlativo`. Lo envia el cliente; el servidor valida
+            el formato `AAA-AAA-NNNNNNN` y que no este repetido.
+          example: 001-001-0000123
+
+        taxId:
+          type: string
+          maxLength: 20
+          description: RUC del cliente.
+          example: '20123456789'
+
+        businessName:
+          type: string
+          maxLength: 150
+          description: Razon social del cliente.
+          example: Juan Perez
+
+        issueDate:
+          type: string
+          format: date
+          description: Fecha de emision.
+
+        saleCondition:
+          $ref: '#/components/schemas/SaleCondition'
+
+        totalAmount:
+          type: number
+          description: |
+            Subtotal calculado por el servidor sumando los importes de `details`.
+            Obligatorio en el esquema compartido, pero su valor se ignora al crear.
+
+        totalIva:
+          type: number
+          description: IVA calculado por el servidor. Al crear, su valor se ignora.
+
+        paymentStatus:
+          $ref: '#/components/schemas/InvoiceStatus'
+
+        details:
+          type: array
+          minItems: 1
+          description: |
+            Lineas de la factura. Una factura sin lineas no es valida, aunque la
+            validacion de beans no lo exija.
+          items:
+            $ref: '#/components/schemas/InvoiceDetailDTO'
+
+      required:
+        - studentId
+        - timbrado
+        - invoiceNumber
+        - taxId
+        - businessName
+        - issueDate
