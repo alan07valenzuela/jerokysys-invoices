@@ -16,6 +16,8 @@ import com.jerokysys.commons.common.Response;
 import com.jerokysys.dto.InvoiceDetailDTO;
 import com.jerokysys.invoices.services.InvoiceDetailService;
 
+import org.springframework.security.access.prepost.PreAuthorize;
+
 /**
  * Las lineas de detalle son de solo lectura: se escriben dentro de la factura.
  * Por eso este controller NO extiende BaseController, que expondría POST, PUT y
@@ -23,6 +25,7 @@ import com.jerokysys.invoices.services.InvoiceDetailService;
  */
 @RestController
 @RequestMapping("/invoice-details")
+@PreAuthorize("hasAnyRole('ADMIN','SECRETARY')")
 public class InvoiceDetailController {
 
     private final InvoiceDetailService invoiceDetailService;

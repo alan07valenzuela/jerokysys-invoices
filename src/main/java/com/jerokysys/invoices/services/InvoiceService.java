@@ -6,6 +6,9 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.regex.Pattern;
 
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -23,6 +26,8 @@ import com.jerokysys.commons.exception.BusinessException;
 import com.jerokysys.commons.service.AbstractBaseService;
 import com.jerokysys.dto.InvoiceDTO;
 import com.jerokysys.dto.InvoiceDetailDTO;
+import com.jerokysys.invoices.config.DomainCache;
+import com.jerokysys.invoices.config.RedisCacheConfig;
 import com.jerokysys.invoices.mappers.InvoiceDetailMapper;
 import com.jerokysys.invoices.mappers.InvoiceMapper;
 import com.jerokysys.invoices.repo.InvoiceRepo;
@@ -42,18 +47,25 @@ public class InvoiceService extends AbstractBaseService<Invoice, InvoiceDTO, Pag
     private final InvoiceMapper mapper;
     private final InvoiceDetailMapper detailMapper;
     private final EntityManager entityManager;
+    private final DomainCache domainCache;
 
     public InvoiceService(InvoiceRepo invoiceRepo, InvoiceMapper invoiceMapper,
-            InvoiceDetailMapper invoiceDetailMapper, EntityManager entityManager) {
+            InvoiceDetailMapper invoiceDetailMapper, EntityManager entityManager,
+            DomainCache domainCache) {
         super(invoiceRepo);
         this.invoiceRepo = invoiceRepo;
         this.mapper = invoiceMapper;
         this.detailMapper = invoiceDetailMapper;
         this.entityManager = entityManager;
+        this.domainCache = domainCache;
     }
 
     @Override
     @Transactional
+    @CachePut(value = RedisCacheConfig.CACHE_INVOICE,
+            key = "#result.id",
+            unless = "#result == null || #result.id == null")
+    @CacheEvict(value = RedisCacheConfig.CACHE_INVOICE, allEntries = true)
     public InvoiceDTO create(InvoiceDTO dto) {
         assertInvoiceNumberAvailable(dto.getInvoiceNumber());
         Student student = loadStudent(dto.getStudentId());
@@ -73,6 +85,8 @@ public class InvoiceService extends AbstractBaseService<Invoice, InvoiceDTO, Pag
 
     @Override
     @Transactional
+    @CacheEvict(value = {RedisCacheConfig.CACHE_INVOICE, RedisCacheConfig.CACHE_INVOICE_DETAIL},
+            allEntries = true)
     public InvoiceDTO update(Long id, InvoiceDTO dto) {
         Invoice entity = invoiceRepo.findById(id)
                 .orElseThrow(() -> new BusinessException(
@@ -96,14 +110,23 @@ public class InvoiceService extends AbstractBaseService<Invoice, InvoiceDTO, Pag
         return toDto(invoiceRepo.save(entity));
     }
 
+    @Override
     @Transactional
+    @CacheEvict(value = {RedisCacheConfig.CACHE_INVOICE, RedisCacheConfig.CACHE_INVOICE_DETAIL},
+            allEntries = true)
+    public void delete(Long id) {
+        super.delete(id);
+    }
+
+    @Transactional
+    @CacheEvict(value = RedisCacheConfig.CACHE_INVOICE, allEntries = true)
     public InvoiceDTO changeStatus(Long id, String status) {
         Invoice entity = invoiceRepo.findById(id)
                 .orElseThrow(() -> new BusinessException(
                         "ENTITY_NOT_FOUND",
                         "Invoice not found with id: " + id));
 
-        InvoiceStatus newStatus = parseStatus(status);
+        InvoiceStatus newStatus = parseTargetStatus(status);
         if (entity.getPaymentStatus() != InvoiceStatus.PENDING) {
             throw new BusinessException("CONFLICT",
                     "Only PENDING invoices change status, this one is "
@@ -119,7 +142,7 @@ public class InvoiceService extends AbstractBaseService<Invoice, InvoiceDTO, Pag
     }
 
     public List<InvoiceDTO> getByStatus(String status) {
-        return mapper.toDtoList(invoiceRepo.findByPaymentStatus(parseStatus(status)));
+        return mapper.toDtoList(invoiceRepo.findByPaymentStatus(parseFilterStatus(status)));
     }
 
     public List<InvoiceDTO> getBySaleCondition(String saleCondition) {
@@ -163,10 +186,13 @@ public class InvoiceService extends AbstractBaseService<Invoice, InvoiceDTO, Pag
 
     @Override
     public List<InvoiceDTO> getAll() {
-        return super.getAll();
+        List<InvoiceDTO> list = super.getAll();
+        domainCache.putAll(RedisCacheConfig.CACHE_INVOICE, list, InvoiceDTO::getId);
+        return list;
     }
 
     @Override
+    @Cacheable(value = RedisCacheConfig.CACHE_INVOICE, key = "#id")
     public InvoiceDTO getById(Long id) {
         return super.getById(id);
     }
@@ -233,13 +259,18 @@ public class InvoiceService extends AbstractBaseService<Invoice, InvoiceDTO, Pag
         entity.setTotalIva(iva);
     }
 
-    private InvoiceStatus parseStatus(String value) {
-        final InvoiceStatus status;
+    /** Estados válidos para consultar/filtrar: incluye PENDING. */
+    private InvoiceStatus parseFilterStatus(String value) {
         try {
-            status = InvoiceStatus.valueOf(value.toUpperCase());
+            return InvoiceStatus.valueOf(value.toUpperCase());
         } catch (IllegalArgumentException | NullPointerException e) {
             throw new BusinessException("VALIDATION_ERROR", "Invalid status: " + value);
         }
+    }
+
+    /** Estados alcanzables por una transición: solo PAID y CANCELLED. */
+    private InvoiceStatus parseTargetStatus(String value) {
+        InvoiceStatus status = parseFilterStatus(value);
         if (status == InvoiceStatus.PENDING) {
             throw new BusinessException("VALIDATION_ERROR",
                     "PENDING is not a reachable target, only PAID or CANCELLED are");

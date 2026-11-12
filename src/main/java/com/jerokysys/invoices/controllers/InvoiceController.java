@@ -18,8 +18,19 @@ import com.jerokysys.commons.domain.entity.Invoice;
 import com.jerokysys.dto.InvoiceDTO;
 import com.jerokysys.invoices.services.InvoiceService;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.ResponseStatus;
+
+import jakarta.validation.Valid;
+
 @RestController
 @RequestMapping("/invoices")
+@PreAuthorize("hasAnyRole('ADMIN','SECRETARY')")
 public class InvoiceController extends BaseController<Invoice, InvoiceDTO, PagedFilter, InvoiceService> {
 
     private final InvoiceService invoiceService;
@@ -29,7 +40,31 @@ public class InvoiceController extends BaseController<Invoice, InvoiceDTO, Paged
         this.invoiceService = invoiceService;
     }
 
+    @Override
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('ADMIN','SECRETARY')")
+    public Response<InvoiceDTO> create(@Valid @RequestBody InvoiceDTO dto) {
+        return super.create(dto);
+    }
+
+    @Override
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN','SECRETARY')")
+    public Response<InvoiceDTO> update(@PathVariable Long id, @Valid @RequestBody InvoiceDTO dto) {
+        return super.update(id, dto);
+    }
+
+    @Override
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasAnyRole('ADMIN','SECRETARY')")
+    public Response<Void> delete(@PathVariable Long id) {
+        return super.delete(id);
+    }
+
     @PatchMapping("/{id}/status")
+    @PreAuthorize("hasAnyRole('ADMIN','SECRETARY')")
     public Response<InvoiceDTO> changeStatus(
             @PathVariable Long id,
             @RequestParam String status) {

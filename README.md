@@ -46,6 +46,11 @@ al arrancar.
 |---|---|---|
 | `INVOICES_SERVER_PORT` | `8083` | Puerto del servicio. |
 | `LOG_LEVEL` | `INFO` | Nivel raiz del logback. |
+| `CACHE_ENABLED` | `true` | Prende o apaga la cache sin tocar codigo. |
+| `CACHE_LOG_LEVEL` | `INFO` | Nivel de los logs `Cache GET/SET/DELETE`. |
+| `REDIS_HOST` | `localhost` | Host de Redis. |
+| `REDIS_PORT` | `6379` | Puerto de Redis. |
+| `REDIS_PASSWORD` | vacio | Password de Redis, si tiene. |
 
 ## Como correr
 
@@ -153,3 +158,18 @@ Cambio de estado de pago: solo `PENDING` puede cambiar, y unicamente a `PAID` o
 `src/main/resources/openapi.yaml` documenta el contrato. **No genera codigo**: los
 controllers se escriben a mano y los DTOs vienen del JAR de `commons`. Se comparte este
 comportamiento con `academic`, donde el archivo es igualmente inerte.
+
+## Redis cache
+
+El servicio cachea DTOs en Redis para proteger la base de datos. Cada
+microservicio usa Redis en `localhost:6379`, base `0`.
+
+- Claves: `<key-prefix>:<domain>:<id>`, por ejemplo `invoices:invoice:5`
+- Dominios y TTL: `cache.domains.*` en `src/main/resources/application.properties`
+  (`0` = persistente, cualquier otro valor = segundos)
+- Lecturas por id con `@Cacheable`; escrituras con `@CachePut` y `@CacheEvict`
+- Listas y paginas nunca se cachean completas: cada elemento se guarda por
+  separado con `DomainCache`
+- Cada operacion se loguea como `Cache GET|SET|DELETE <clave>` con HIT/MISS y TTL;
+  el nivel se controla con `logging.level.com.jerokysys.invoices.config.LoggingCache`
+- Si Redis no esta disponible, la request sigue contra PostgreSQL y el fallo se loguea

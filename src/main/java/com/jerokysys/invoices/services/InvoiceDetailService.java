@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -15,6 +17,8 @@ import com.jerokysys.commons.domain.entity.InvoiceDetail;
 import com.jerokysys.commons.exception.BusinessException;
 import com.jerokysys.commons.service.AbstractBaseService;
 import com.jerokysys.dto.InvoiceDetailDTO;
+import com.jerokysys.invoices.config.DomainCache;
+import com.jerokysys.invoices.config.RedisCacheConfig;
 import com.jerokysys.invoices.mappers.InvoiceDetailMapper;
 import com.jerokysys.invoices.repo.InvoiceDetailRepo;
 
@@ -28,11 +32,14 @@ public class InvoiceDetailService extends AbstractBaseService<InvoiceDetail, Inv
     @Getter
     private final InvoiceDetailRepo invoiceDetailRepo;
     private final InvoiceDetailMapper mapper;
+    private final DomainCache domainCache;
 
-    public InvoiceDetailService(InvoiceDetailRepo invoiceDetailRepo, InvoiceDetailMapper invoiceDetailMapper) {
+    public InvoiceDetailService(InvoiceDetailRepo invoiceDetailRepo,
+            InvoiceDetailMapper invoiceDetailMapper, DomainCache domainCache) {
         super(invoiceDetailRepo);
         this.invoiceDetailRepo = invoiceDetailRepo;
         this.mapper = invoiceDetailMapper;
+        this.domainCache = domainCache;
     }
 
     @Override
@@ -47,6 +54,25 @@ public class InvoiceDetailService extends AbstractBaseService<InvoiceDetail, Inv
         throw new BusinessException(
                 "DETAIL_NOT_WRITABLE",
                 "Invoice details are written only through their invoice");
+    }
+
+    @Override
+    @Cacheable(value = RedisCacheConfig.CACHE_INVOICE_DETAIL, key = "#id")
+    public InvoiceDetailDTO getById(Long id) {
+        return super.getById(id);
+    }
+
+    @Override
+    public List<InvoiceDetailDTO> getAll() {
+        List<InvoiceDetailDTO> list = super.getAll();
+        domainCache.putAll(RedisCacheConfig.CACHE_INVOICE_DETAIL, list, InvoiceDetailDTO::getId);
+        return list;
+    }
+
+    @Override
+    @CacheEvict(value = RedisCacheConfig.CACHE_INVOICE_DETAIL, allEntries = true)
+    public void delete(Long id) {
+        super.delete(id);
     }
 
     public List<InvoiceDetailDTO> getByInvoice(Long invoiceId) {
