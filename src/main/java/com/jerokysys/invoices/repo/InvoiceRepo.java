@@ -19,9 +19,9 @@ public interface InvoiceRepo extends BaseRepository<Invoice, Long> {
 
     List<Invoice> findByInvoiceNumber(String invoiceNumber);
 
-    List<Invoice> findByTimbrado(String timbrado);
+    List<Invoice> findByStampNumber(String stampNumber);
 
-    List<Invoice> findByTaxId(String taxId);
+    List<Invoice> findByCustomerRuc(String customerRuc);
 
     List<Invoice> findByIssueDate(LocalDate date);
 
@@ -29,7 +29,7 @@ public interface InvoiceRepo extends BaseRepository<Invoice, Long> {
 
     List<Invoice> findByTotalAmountBetween(BigDecimal min, BigDecimal max);
 
-    List<Invoice> findByBusinessNameContainingIgnoreCase(String businessName);
+    List<Invoice> findByCustomerNameContainingIgnoreCase(String customerName);
 
-    boolean existsByInvoiceNumber(String invoiceNumber);
+    boolean existsByTaxStampIdAndSequenceNumber(Long taxStampId, Integer sequenceNumber);
 }

@@ -3,7 +3,6 @@ package com.jerokysys.invoices.services;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -14,6 +13,8 @@ import org.springframework.stereotype.Service;
 import com.jerokysys.commons.common.PagedFilter;
 import com.jerokysys.commons.common.PageResult;
 import com.jerokysys.commons.domain.entity.InvoiceDetail;
+import com.jerokysys.commons.domain.enums.InvoiceConceptType;
+import com.jerokysys.commons.domain.enums.VatType;
 import com.jerokysys.commons.exception.BusinessException;
 import com.jerokysys.commons.service.AbstractBaseService;
 import com.jerokysys.dto.InvoiceDetailDTO;
@@ -26,8 +27,6 @@ import lombok.Getter;
 
 @Service
 public class InvoiceDetailService extends AbstractBaseService<InvoiceDetail, InvoiceDetailDTO, PagedFilter> {
-
-    private static final Set<String> CONCEPT_TYPES = Set.of("MATRICULA", "EXAMEN");
 
     @Getter
     private final InvoiceDetailRepo invoiceDetailRepo;
@@ -83,25 +82,29 @@ public class InvoiceDetailService extends AbstractBaseService<InvoiceDetail, Inv
         return mapper.toDtoList(invoiceDetailRepo.findByCorrespondingMonth(correspondingMonth));
     }
 
-    public List<InvoiceDetailDTO> getByVatRate(Integer vatRate) {
-        return mapper.toDtoList(invoiceDetailRepo.findByVatRate(vatRate));
+    public List<InvoiceDetailDTO> getByVatType(String vatType) {
+        return mapper.toDtoList(invoiceDetailRepo.findByVatType(parseVatType(vatType)));
     }
 
     public List<InvoiceDetailDTO> searchByDescription(String description) {
         return mapper.toDtoList(invoiceDetailRepo.findByDescriptionContaining(description));
     }
 
-    public List<InvoiceDetailDTO> getByAmountRange(BigDecimal min, BigDecimal max) {
-        return mapper.toDtoList(invoiceDetailRepo.findByAmountBetween(min, max));
+    public List<InvoiceDetailDTO> getBySubtotalRange(BigDecimal min, BigDecimal max) {
+        return mapper.toDtoList(invoiceDetailRepo.findBySubtotalBetween(min, max));
     }
 
     /**
-     * El concepto facturado viaja dentro de description con un token entre corchetes
-     * al final, por ejemplo `[MATRICULA#12]`, porque el esquema compartido no tiene
-     * columnas enrollment_id ni exam_id. Se busca por ese substring.
+     * El concepto facturado se guarda en columnas propias. Las facturas viejas
+     * pueden tener el token historico en `description`, pero las nuevas usan
+     * `conceptType` y `conceptId`.
      */
     public List<InvoiceDetailDTO> getByConcept(String conceptType, Long conceptId) {
-        return mapper.toDtoList(invoiceDetailRepo.findByDescriptionContaining(buildConceptToken(conceptType, conceptId)));
+        if (conceptId == null) {
+            throw new BusinessException("VALIDATION_ERROR", "conceptId is required");
+        }
+        return mapper.toDtoList(invoiceDetailRepo
+                .findByConceptTypeAndConceptId(parseConceptType(conceptType), conceptId));
     }
 
     @Override
@@ -121,15 +124,19 @@ public class InvoiceDetailService extends AbstractBaseService<InvoiceDetail, Inv
         return mapper.toEntity(dto);
     }
 
-    private String buildConceptToken(String conceptType, Long conceptId) {
-        if (conceptType == null || conceptId == null) {
-            throw new BusinessException("VALIDATION_ERROR",
-                    "Both conceptType and conceptId are required");
+    private VatType parseVatType(String value) {
+        try {
+            return VatType.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new BusinessException("VALIDATION_ERROR", "Invalid vatType: " + value);
         }
-        String normalized = conceptType.trim().toUpperCase(Locale.ROOT);
-        if (!CONCEPT_TYPES.contains(normalized)) {
-            throw new BusinessException("VALIDATION_ERROR", "Invalid conceptType: " + conceptType);
+    }
+
+    private InvoiceConceptType parseConceptType(String value) {
+        try {
+            return InvoiceConceptType.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new BusinessException("VALIDATION_ERROR", "Invalid conceptType: " + value);
         }
-        return "[" + normalized + "#" + conceptId + "]";
     }
 }

@@ -3,16 +3,18 @@ openapi: 3.0.3
 info:
   title: JerokySys - MS2 Cobro de Facturas
   description: |
-    Microservicio de cobro del sistema JerokySys. Es dueño de `Invoice`, `InvoiceDetail`
-    y de los enumerados `InvoiceStatus` y `SaleCondition`.
+    Microservicio de cobro del sistema JerokySys. Es dueño de `Invoice`, `InvoiceDetail`,
+    `TaxStamp` y de los enumerados `InvoiceStatus`, `SaleCondition` y `VatType`.
 
     Las entidades, los DTOs de entidad y las clases base provienen del JAR `commons`
     (Entrega #1). Este servicio los consume sin modificarlos.
 
-    **Student** (MS Personas) y **Enrollment** / `Exam` (MS3) son entidades externas:
-    solo se referencian por identificador, este servicio nunca lee sus tablas. Por eso
-    `studentId` se resuelve con un proxy de JPA y es la base de datos la que valida
-    que el alumno exista.
+    La factura es un documento autocontenido: guarda un snapshot del cliente y del
+    emisor, y no tiene FK a `Student`. El frontend resuelve los datos fiscales del
+    estudiante o guardián y los envia en el `InvoiceDTO`.
+
+    Los precios unitarios incluyen IVA. El IVA no se suma al total: se liquida como
+    `sales5 / 21` y `sales10 / 11`.
 
     Los controllers se escriben a mano contra `commons` (`BaseController`,
     `AbstractBaseService`) y este archivo documenta el contrato: no se genera codigo
@@ -28,9 +30,11 @@ servers:
 
 tags:
   - name: Invoice
-    description: Cabecera de factura. Titulos fiscales, condicion de venta y estado de pago.
+    description: Cabecera de factura. Cliente, emisor, timbrado, condicion de venta y estado de pago.
   - name: InvoiceDetail
     description: Lineas de detalle de la factura. Solo lectura; se escriben dentro de la factura.
+  - name: TaxStamp
+    description: Timbrados autorizados, vigencia y correlativo.
 
 # ==============================================================================
 # Rutas.
@@ -71,12 +75,14 @@ paths:
       description: |
         Crea la factura junto con sus lineas de detalle.
 
-        El servidor ignora los valores de `totalAmount` y `totalIva` que envien: los
-        recalcula siempre sumando los importes de `details`, con
-        `totalIva = sum(amount * vatRate / 100)`.
+        El servidor ignora la numeracion y los totales que envie el cliente: bloquea
+        el timbrado, asigna el correlativo y calcula los importes desde `details`.
 
-        Una factura sin lineas se rechaza, y un `invoiceNumber` con formato invalido o
-        ya usado tambien. La cabecera y las lineas se guardan en una sola transaccion.
+        Los precios unitarios incluyen IVA. El IVA no se suma al total:
+        `iva5 = sales5 / 21` e `iva10 = sales10 / 11`.
+
+        Una factura sin lineas se rechaza. La cabecera y las lineas se guardan en una
+        sola transaccion, junto con el incremento del correlativo del timbrado.
       operationId: createInvoice
       requestBody:
         required: true
@@ -116,10 +122,10 @@ paths:
       summary: Actualiza una factura
       description: |
         Reemplaza las lineas de detalle por las que envie el cuerpo y recalcula los
-        totales. Si `details` viene nulo, conserva las lineas existentes.
+        totales. Solo las facturas `PENDING` admiten cambios.
 
-        `studentId`, `invoiceNumber`, `totalAmount`, `totalIva` y `paymentStatus` no se
-        tocan si vienen nulos.
+        No se modifican la numeracion, el timbrado, los snapshots del emisor ni
+        `issueDate`. La cabecera y las lineas se guardan en una sola transaccion.
       operationId: updateInvoice
       requestBody:
         required: true
@@ -140,9 +146,9 @@ paths:
       tags: [Invoice]
       summary: Anula logicamente una factura
       description: |
-        Borrado logico heredado de `AbstractBaseService`: la fila queda con
-        `active = false` y `deleted = true`, nunca se borra fisicamente. Solo actua
-        sobre la cabecera.
+        Borrado logico: la fila queda con `active = false` y `deleted = true`, nunca se
+        borra fisicamente. Solo actua sobre facturas `PENDING` y propaga el borrado a
+        las lineas de detalle. El correlativo consumido no se reutiliza.
       operationId: deleteInvoice
       responses:
         '204':
@@ -180,12 +186,32 @@ paths:
 
   # --------------------------------------------------------------------------
   # Filtros. Uno por endpoint, cada uno con un unico parametro, al estilo de
-  # academic (`/by-student`, `/by-status`, `/by-date`...). No se combinan entre si.
+  # academic (`/by-customer-ruc`, `/by-status`, `/by-date`...). No se combinan entre si.
   # --------------------------------------------------------------------------
+  /invoices/by-customer-ruc:
+    get:
+      tags: [Invoice]
+      summary: Facturas de un cliente por RUC
+      operationId: getInvoicesByCustomerRuc
+      parameters:
+        - name: ruc
+          in: query
+          required: true
+          schema: { type: string, maxLength: 20 }
+          example: '80012345-6'
+      responses:
+        '200':
+          description: Facturas de ese cliente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseInvoiceList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /invoices/by-student/{studentId}:
     get:
       tags: [Invoice]
-      summary: Facturas de un estudiante
+      summary: Facturas de un alumno
       operationId: getInvoicesByStudent
       parameters:
         - name: studentId
@@ -194,7 +220,7 @@ paths:
           schema: { type: integer, format: int64 }
       responses:
         '200':
-          description: Facturas del estudiante.
+          description: Facturas del alumno.
           content:
             application/json:
               schema:
@@ -263,17 +289,17 @@ paths:
                 $ref: '#/components/schemas/ResponseInvoiceList'
         '500': { $ref: '#/components/responses/InternalError' }
 
-  /invoices/by-timbrado:
+  /invoices/by-stamp-number:
     get:
       tags: [Invoice]
       summary: Facturas por numero de timbrado
-      operationId: getInvoicesByTimbrado
+      operationId: getInvoicesByStampNumber
       parameters:
-        - name: timbrado
+        - name: stampNumber
           in: query
           required: true
           schema: { type: string, maxLength: 20 }
-          example: '001'
+          example: '12345678'
       responses:
         '200':
           description: Facturas de ese timbrado.
@@ -283,20 +309,21 @@ paths:
                 $ref: '#/components/schemas/ResponseInvoiceList'
         '500': { $ref: '#/components/responses/InternalError' }
 
-  /invoices/by-tax-id:
+  /invoices/search-by-customer-name:
     get:
       tags: [Invoice]
-      summary: Facturas por RUC del cliente
-      operationId: getInvoicesByTaxId
+      summary: Facturas por coincidencia parcial en el nombre del cliente
+      operationId: searchInvoicesByCustomerName
       parameters:
-        - name: taxId
+        - name: customerName
           in: query
           required: true
-          schema: { type: string, maxLength: 20 }
-          example: '20123456789'
+          description: Substring, sin distinguir mayusculas.
+          schema: { type: string }
+          example: Perez
       responses:
         '200':
-          description: Facturas de ese cliente.
+          description: Facturas que coinciden.
           content:
             application/json:
               schema:
@@ -373,25 +400,114 @@ paths:
                 $ref: '#/components/schemas/ResponseInvoiceList'
         '500': { $ref: '#/components/responses/InternalError' }
 
-  /invoices/search-by-business-name:
+  # ==========================================================================
+  # TIMBRADOS
+  # ==========================================================================
+  /tax-stamps:
     get:
-      tags: [Invoice]
-      summary: Facturas por coincidencia parcial en la razon social
-      operationId: searchInvoicesByBusinessName
+      tags: [TaxStamp]
+      summary: Lista timbrados, paginados
+      operationId: listTaxStamps
       parameters:
-        - name: businessName
-          in: query
-          required: true
-          description: Substring, sin distinguir mayusculas.
-          schema: { type: string }
-          example: Perez
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/SortParam'
+        - $ref: '#/components/parameters/DirectionParam'
       responses:
         '200':
-          description: Facturas que coinciden.
+          description: Pagina de timbrados.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResponseInvoiceList'
+                $ref: '#/components/schemas/ResponseTaxStampPage'
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [TaxStamp]
+      summary: Crea un timbrado
+      operationId: createTaxStamp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaxStampDTO'
+      responses:
+        '201':
+          description: Timbrado creado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseTaxStamp'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /tax-stamps/valid:
+    get:
+      tags: [TaxStamp]
+      summary: Timbrados vigentes en una fecha
+      operationId: getValidTaxStamps
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          example: '2026-03-01'
+      responses:
+        '200':
+          description: Timbrados vigentes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseTaxStampList'
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /tax-stamps/{id}:
+    get:
+      tags: [TaxStamp]
+      summary: Obtiene un timbrado por id
+      operationId: getTaxStampById
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      responses:
+        '200':
+          description: Timbrado encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseTaxStamp'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    put:
+      tags: [TaxStamp]
+      summary: Actualiza un timbrado
+      operationId: updateTaxStamp
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaxStampDTO'
+      responses:
+        '200':
+          description: Timbrado actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResponseTaxStamp'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    delete:
+      tags: [TaxStamp]
+      summary: Borra logicamente un timbrado
+      operationId: deleteTaxStamp
+      parameters:
+        - $ref: '#/components/parameters/IdParam'
+      responses:
+        '204':
+          description: Timbrado borrado.
+        '400': { $ref: '#/components/responses/BadRequest' }
         '500': { $ref: '#/components/responses/InternalError' }
 
   # ==========================================================================
@@ -473,25 +589,25 @@ paths:
                 $ref: '#/components/schemas/ResponseInvoiceDetailList'
         '500': { $ref: '#/components/responses/InternalError' }
 
-  /invoice-details/by-vat-rate:
+  /invoice-details/by-vat-type:
     get:
       tags: [InvoiceDetail]
-      summary: Lineas por tasa de IVA
-      operationId: getInvoiceDetailsByVatRate
+      summary: Lineas por tratamiento de IVA
+      operationId: getInvoiceDetailsByVatType
       parameters:
-        - name: vatRate
+        - name: vatType
           in: query
           required: true
-          description: 'Porcentaje de IVA. `0` significa exento.'
-          schema: { type: integer, format: int32 }
-          example: 10
+          schema: { type: string, enum: [EXENTA, GRAVADA_5, GRAVADA_10] }
+          example: GRAVADA_10
       responses:
         '200':
-          description: Lineas con esa tasa.
+          description: Lineas con ese tratamiento.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ResponseInvoiceDetailList'
+        '400': { $ref: '#/components/responses/BadRequest' }
         '500': { $ref: '#/components/responses/InternalError' }
 
   /invoice-details/by-concept:
@@ -522,11 +638,11 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '500': { $ref: '#/components/responses/InternalError' }
 
-  /invoice-details/by-amount-range:
+  /invoice-details/by-subtotal-range:
     get:
       tags: [InvoiceDetail]
-      summary: Lineas por rango de importe
-      operationId: getInvoiceDetailsByAmountRange
+      summary: Lineas por rango de subtotal
+      operationId: getInvoiceDetailsBySubtotalRange
       parameters:
         - name: min
           in: query
@@ -601,8 +717,8 @@ components:
 
         El `GlobalExceptionHandler` de `commons` traduce **toda** `BusinessException` a
         HTTP 400, sin distinguir el `errorCode` (`ENTITY_NOT_FOUND`, `CONFLICT`,
-        `VALIDATION_ERROR`, `STUDENT_NOT_FOUND`), y tampoco serializa ese codigo en el
-        cuerpo. Es el mismo comportamiento que en `academic`.
+        `VALIDATION_ERROR`, `STAMP_EXPIRED`, `INVOICE_NOT_EDITABLE`), y tampoco
+        serializa ese codigo en el cuerpo. Es el mismo comportamiento que en `academic`.
       content:
         application/json:
           schema:
@@ -705,6 +821,43 @@ components:
         page: { type: integer, format: int32 }
         size: { type: integer, format: int32 }
 
+    ResponseTaxStamp:
+      type: object
+      properties:
+        data: { $ref: '#/components/schemas/TaxStampDTO' }
+        message: { type: string }
+        status: { type: integer }
+        success: { type: boolean }
+
+    ResponseTaxStampList:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/TaxStampDTO' }
+        message: { type: string }
+        status: { type: integer }
+        success: { type: boolean }
+
+    ResponseTaxStampPage:
+      type: object
+      properties:
+        data: { $ref: '#/components/schemas/PageResultTaxStamp' }
+        message: { type: string }
+        status: { type: integer }
+        success: { type: boolean }
+
+    PageResultTaxStamp:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/TaxStampDTO' }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer, format: int32 }
+        page: { type: integer, format: int32 }
+        size: { type: integer, format: int32 }
+
     # ==========================================================================
     # ENUMERADOS (del JAR de commons)
     # ==========================================================================
@@ -723,6 +876,23 @@ components:
         - CONTADO
         - CREDITO
 
+    VatType:
+      type: string
+      description: Tratamiento tributario de la linea
+      enum:
+        - EXENTA
+        - GRAVADA_5
+        - GRAVADA_10
+
+    InvoiceConceptType:
+      type: string
+      description: Concepto facturado en la linea
+      enum:
+        - MATRICULA
+        - CUOTA
+        - EXAMEN
+        - OTRO
+
     # ==========================================================================
     # DTOs DE ENTIDAD (del JAR de commons)
     # ==========================================================================
@@ -731,9 +901,9 @@ components:
       description: |
         Linea de detalle de una factura.
 
-        La referencia al concepto facturado viaja dentro de `description` con un token
-        entre corchetes al final (`[MATRICULA#12]` o `[EXAMEN#45]`), porque el esquema
-        compartido no tiene columnas `enrollment_id` ni `exam_id`.
+        `unitPrice` incluye IVA. `subtotal` es `quantity * unitPrice` y lo calcula
+        el servidor. La referencia al concepto facturado viaja dentro de
+        `description` con un token entre corchetes al final (`[MATRICULA#12]`).
       properties:
         id:
           type: integer
@@ -743,40 +913,56 @@ components:
         invoiceId:
           type: integer
           format: int64
-          description: Factura a la que pertenece la linea
+          readOnly: true
 
         description:
           type: string
           maxLength: 255
           description: Concepto facturado. Si referencia una matricula o un examen, debe incluir el token entre corchetes.
 
-        amount:
+        quantity:
           type: number
-          description: |
-            Base imponible de la linea. El IVA se calcula como
-            `amount * vatRate / 100`.
+          description: Cantidad facturada. Debe ser mayor que cero.
 
-        vatRate:
+        unitPrice:
+          type: number
+          description: Precio unitario con IVA incluido.
+
+        subtotal:
+          type: number
+          readOnly: true
+          description: Valor de venta de la linea, con IVA incluido.
+
+        vatType:
+          $ref: '#/components/schemas/VatType'
+
+        conceptType:
+          $ref: '#/components/schemas/InvoiceConceptType'
+
+        conceptId:
           type: integer
-          format: int32
-          description: Porcentaje de IVA aplicado. `0` significa exento.
-          example: 10
+          format: int64
 
         correspondingMonth:
           type: string
-          maxLength: 20
+          maxLength: 7
           description: Mes al que se imputa el cargo, en formato `AAAA-MM`.
           example: '2026-03'
 
       required:
         - description
-        - amount
+        - quantity
+        - unitPrice
+        - vatType
 
     InvoiceDTO:
       type: object
       description: |
-        Factura. El servidor siempre recalcula `totalAmount` y `totalIva` a partir de
-        `details`: los valores que envie el cliente se ignoran.
+        Factura. El servidor asigna la numeracion y calcula los totales a partir de
+        `details`; los valores de solo lectura que envie el cliente se ignoran.
+
+        Los precios de las lineas incluyen IVA. El IVA no se suma al total: se
+        liquida como `sales5 / 21` y `sales10 / 11`.
       properties:
         id:
           type: integer
@@ -786,72 +972,200 @@ components:
         studentId:
           type: integer
           format: int64
-          description: |
-            Estudiante facturado. Referencia externa a MS Personas: el servicio no lee
-            la tabla `students`, solo escribe el identificador y deja que la FK lo
-            valide.
+          description: Alumno beneficiario. Referencia para filtrar; el cliente fiscal se guarda en `customer*`.
 
-        timbrado:
+        taxStampId:
+          type: integer
+          format: int64
+          description: Timbrado seleccionado. El backend lo bloquea y asigna el correlativo.
+
+        establishmentCode:
           type: string
-          maxLength: 20
-          description: Numero de timbrado del establecimiento emisor.
-          example: '001'
+          maxLength: 3
+          readOnly: true
+
+        expeditionPoint:
+          type: string
+          maxLength: 3
+          readOnly: true
+
+        sequenceNumber:
+          type: integer
+          format: int32
+          readOnly: true
 
         invoiceNumber:
           type: string
           maxLength: 20
-          description: |
-            Numero correlativo de la factura, con formato
-            `timbrado-serie-correlativo`. Lo envia el cliente; el servidor valida
-            el formato `AAA-AAA-NNNNNNN` y que no este repetido.
-          example: 001-001-0000123
-
-        taxId:
-          type: string
-          maxLength: 20
-          description: RUC del cliente.
-          example: '20123456789'
-
-        businessName:
-          type: string
-          maxLength: 150
-          description: Razon social del cliente.
-          example: Juan Perez
+          readOnly: true
+          description: Numero generado por el servidor con formato `AAA-AAA-NNNNNNN`.
 
         issueDate:
           type: string
           format: date
           description: Fecha de emision.
 
+        dueDate:
+          type: string
+          format: date
+          description: Vencimiento, para ventas a credito.
+
         saleCondition:
           $ref: '#/components/schemas/SaleCondition'
-
-        totalAmount:
-          type: number
-          description: |
-            Subtotal calculado por el servidor sumando los importes de `details`.
-            Obligatorio en el esquema compartido, pero su valor se ignora al crear.
-
-        totalIva:
-          type: number
-          description: IVA calculado por el servidor. Al crear, su valor se ignora.
 
         paymentStatus:
           $ref: '#/components/schemas/InvoiceStatus'
 
+        customerName:
+          type: string
+          maxLength: 150
+          description: Nombre o razon social del cliente.
+
+        customerRuc:
+          type: string
+          maxLength: 20
+          description: RUC del cliente. La factura no acepta CI.
+
+        customerAddress:
+          type: string
+          maxLength: 255
+
+        issuerName:
+          type: string
+          maxLength: 150
+          description: Snapshot del emisor al emitir la factura.
+
+        issuerRuc:
+          type: string
+          maxLength: 20
+          description: Debe coincidir con el RUC del timbrado.
+
+        issuerActivity:
+          type: string
+
+        issuerPhone:
+          type: string
+          maxLength: 30
+
+        issuerAddress:
+          type: string
+          maxLength: 255
+
+        issuerEmail:
+          type: string
+          maxLength: 150
+
+        stampNumber:
+          type: string
+          maxLength: 20
+          readOnly: true
+
+        stampValidFrom:
+          type: string
+          format: date
+          readOnly: true
+
+        stampValidUntil:
+          type: string
+          format: date
+          readOnly: true
+
+        exemptAmount:
+          type: number
+          readOnly: true
+
+        sales5Amount:
+          type: number
+          readOnly: true
+          description: Ventas al 5%, con IVA incluido.
+
+        sales10Amount:
+          type: number
+          readOnly: true
+          description: Ventas al 10%, con IVA incluido.
+
+        iva5Amount:
+          type: number
+          readOnly: true
+          description: IVA liquidado al 5%, calculado como sales5 / 21.
+
+        iva10Amount:
+          type: number
+          readOnly: true
+          description: IVA liquidado al 10%, calculado como sales10 / 11.
+
+        totalAmount:
+          type: number
+          readOnly: true
+          description: Suma de exentas, ventas 5% y ventas 10%. El IVA ya esta incluido.
+
+        totalIva:
+          type: number
+          readOnly: true
+          description: Suma de iva5Amount e iva10Amount. Es informativo.
+
         details:
           type: array
           minItems: 1
-          description: |
-            Lineas de la factura. Una factura sin lineas no es valida, aunque la
-            validacion de beans no lo exija.
           items:
             $ref: '#/components/schemas/InvoiceDetailDTO'
 
       required:
-        - studentId
-        - timbrado
-        - invoiceNumber
-        - taxId
-        - businessName
+        - taxStampId
         - issueDate
+        - customerName
+        - customerRuc
+        - issuerName
+        - issuerRuc
+        - issuerActivity
+        - issuerAddress
+        - details
+
+    TaxStampDTO:
+      type: object
+      description: Timbrado autorizado y correlativo vigente.
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+
+        businessRuc:
+          type: string
+          maxLength: 20
+
+        stampNumber:
+          type: string
+          maxLength: 20
+
+        establishmentCode:
+          type: string
+          maxLength: 3
+
+        expeditionPoint:
+          type: string
+          maxLength: 3
+
+        validFrom:
+          type: string
+          format: date
+
+        validUntil:
+          type: string
+          format: date
+
+        nextSequence:
+          type: integer
+          format: int32
+          readOnly: true
+
+        active:
+          type: boolean
+
+      required:
+        - businessRuc
+        - stampNumber
+        - establishmentCode
+        - expeditionPoint
+        - validFrom
+        - validUntil

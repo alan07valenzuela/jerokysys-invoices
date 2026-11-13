@@ -71,16 +71,16 @@ public class InvoiceController extends BaseController<Invoice, InvoiceDTO, Paged
         return Response.success(invoiceService.changeStatus(id, status));
     }
 
-    @GetMapping("/by-student/{studentId}")
-    public Response<List<InvoiceDTO>> getByStudent(
-            @PathVariable Long studentId) {
-        return Response.success(invoiceService.getByStudent(studentId));
-    }
-
     @GetMapping("/by-status")
     public Response<List<InvoiceDTO>> getByStatus(
             @RequestParam String status) {
         return Response.success(invoiceService.getByStatus(status));
+    }
+
+    @GetMapping("/by-student/{studentId}")
+    public Response<List<InvoiceDTO>> getByStudent(
+            @PathVariable Long studentId) {
+        return Response.success(invoiceService.getByStudent(studentId));
     }
 
     @GetMapping("/by-sale-condition")
@@ -95,16 +95,16 @@ public class InvoiceController extends BaseController<Invoice, InvoiceDTO, Paged
         return Response.success(invoiceService.getByInvoiceNumber(invoiceNumber));
     }
 
-    @GetMapping("/by-timbrado")
-    public Response<List<InvoiceDTO>> getByTimbrado(
-            @RequestParam String timbrado) {
-        return Response.success(invoiceService.getByTimbrado(timbrado));
+    @GetMapping("/by-stamp-number")
+    public Response<List<InvoiceDTO>> getByStampNumber(
+            @RequestParam String stampNumber) {
+        return Response.success(invoiceService.getByStampNumber(stampNumber));
     }
 
-    @GetMapping("/by-tax-id")
-    public Response<List<InvoiceDTO>> getByTaxId(
-            @RequestParam String taxId) {
-        return Response.success(invoiceService.getByTaxId(taxId));
+    @GetMapping("/by-customer-ruc")
+    public Response<List<InvoiceDTO>> getByCustomerRuc(
+            @RequestParam String ruc) {
+        return Response.success(invoiceService.getByCustomerRuc(ruc));
     }
 
     @GetMapping("/by-date")
@@ -127,9 +127,9 @@ public class InvoiceController extends BaseController<Invoice, InvoiceDTO, Paged
         return Response.success(invoiceService.getByAmountRange(min, max));
     }
 
-    @GetMapping("/search-by-business-name")
-    public Response<List<InvoiceDTO>> searchByBusinessName(
-            @RequestParam String businessName) {
-        return Response.success(invoiceService.searchByBusinessName(businessName));
+    @GetMapping("/search-by-customer-name")
+    public Response<List<InvoiceDTO>> searchByCustomerName(
+            @RequestParam String customerName) {
+        return Response.success(invoiceService.searchByCustomerName(customerName));
     }
 }

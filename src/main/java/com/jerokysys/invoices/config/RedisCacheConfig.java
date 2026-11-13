@@ -38,6 +38,7 @@ public class RedisCacheConfig implements CachingConfigurer {
 
     public static final String CACHE_INVOICE = "invoice";
     public static final String CACHE_INVOICE_DETAIL = "invoicedetail";
+    public static final String CACHE_TAX_STAMP = "taxstamp";
 
     /**
      * Every value comes from application.properties (prefix "cache").

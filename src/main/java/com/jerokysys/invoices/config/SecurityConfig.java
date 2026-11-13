@@ -54,8 +54,17 @@ public class SecurityConfig {
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
 
                         // Politicas por URL: lectura
-                        .requestMatchers(HttpMethod.GET, "/invoices/**", "/invoice-details/**")
+                        .requestMatchers(HttpMethod.GET, "/invoices/**", "/invoice-details/**",
+                                "/tax-stamps/**")
                         .hasAnyRole("ADMIN", "SECRETARY")
+
+                        // Timbrados: escritura solo para ADMIN
+                        .requestMatchers(HttpMethod.POST, "/tax-stamps")
+                        .hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/tax-stamps/**")
+                        .hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/tax-stamps/**")
+                        .hasRole("ADMIN")
 
                         // Politicas por URL: escritura
                         .requestMatchers(HttpMethod.POST, "/invoices")

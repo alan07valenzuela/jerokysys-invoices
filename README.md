@@ -1,33 +1,46 @@
 # JerokySys - MS2 Cobro de Facturas
 
-Microservicio de cobro del sistema JerokySys. Es dueño de `Invoice`, `InvoiceDetail` y
-de los enumerados `InvoiceStatus` y `SaleCondition`.
+Microservicio de facturación del sistema JerokySys. Es dueño de `Invoice`,
+`InvoiceDetail`, `TaxStamp` y de los enumerados `InvoiceStatus`, `SaleCondition`
+y `VatType`.
+
+La factura es un documento **autocontenido**:
+
+- tiene un `studentId` opcional, como referencia para filtrar;
+- no usa el alumno como fuente de los datos del cliente;
+- guarda un snapshot del cliente (`customerName`, `customerRuc`,
+  `customerAddress`);
+- guarda un snapshot del emisor (`issuer*`);
+- guarda un snapshot del timbrado (`stampNumber`, `stampValidFrom`,
+  `stampValidUntil`).
+
+El frontend resuelve los datos fiscales del pagador —el guardián, o el alumno
+si no tiene guardián— y los envía en el `InvoiceDTO`.
 
 ## Dependencias del ecosistema
 
 | Componente | Rol |
 |---|---|
-| `commons` | JAR con las entidades, los DTOs generados y las clases base (`BaseController`, `AbstractBaseService`, `Response`, `BusinessException`, `GlobalExceptionHandler`). Este servicio lo consume sin modificarlo. |
+| `commons` | JAR con las entidades, los DTOs generados y las clases base (`BaseController`, `AbstractBaseService`, `Response`, `BusinessException`, `GlobalExceptionHandler`). |
 | `eureka` | Registro de servicios. |
-| `academic` | MS hermano. Comparte la base de datos y el esquema. |
-| MS Personas | Dueño de `Student`. |
-| MS3 | Dueño de `Enrollment` y `Exam`. |
+| PostgreSQL | Base compartida. El esquema lo migra `commons`. |
 
-`Student`, `Enrollment` y `Exam` son **entidades externas**: este servicio solo escribe
-el identificador y deja que la FK lo valide. Nunca lee sus tablas.
+`Student`, `Enrollment` y `Exam` siguen existiendo en `commons` para otros
+microservicios, pero `invoices` ya no los usa. `Enrollment` y `Exam` solo se
+referencian con el token `[MATRICULA#12]` o `[EXAMEN#45]` dentro de
+`InvoiceDetail.description`.
 
 ## Requisitos
 
 - Java 17
 - Maven
-- El artefacto `com.jerokysys:commons:0.0.3-SNAPSHOT` instalado en el repositorio local
+- El artefacto `com.jerokysys:commons:0.0.3-SNAPSHOT` instalado en el
+  repositorio local
 - PostgreSQL con el esquema de `commons` aplicado
 
 ## Configuración
 
-Las credenciales no están en el repo. Copiá el ejemplo y completalo:
-
-```
+```powershell
 cp src/main/resources/config/private.properties.example src/main/resources/config/private.properties
 ```
 
@@ -35,30 +48,31 @@ cp src/main/resources/config/private.properties.example src/main/resources/confi
 db.url=jdbc:postgresql://<host>:<puerto>/<base>
 db.username=<usuario>
 db.password=<password>
+JWT_SECRET=<secreto-compartido-con-auth>
 ```
 
-El esquema lo migra `commons`; este servicio corre con `ddl-auto=validate` y solo valida
-al arrancar.
+El esquema lo migra `commons`; este servicio corre con `ddl-auto=validate` y
+solo valida al arrancar.
 
 ### Variables de entorno
 
-| Variable | Default | Para que sirve |
+| Variable | Default | Para qué sirve |
 |---|---|---|
 | `INVOICES_SERVER_PORT` | `8083` | Puerto del servicio. |
-| `LOG_LEVEL` | `INFO` | Nivel raiz del logback. |
-| `CACHE_ENABLED` | `true` | Prende o apaga la cache sin tocar codigo. |
+| `LOG_LEVEL` | `INFO` | Nivel raíz del logback. |
+| `CACHE_ENABLED` | `true` | Prende o apaga la caché sin tocar código. |
 | `CACHE_LOG_LEVEL` | `INFO` | Nivel de los logs `Cache GET/SET/DELETE`. |
 | `REDIS_HOST` | `localhost` | Host de Redis. |
 | `REDIS_PORT` | `6379` | Puerto de Redis. |
-| `REDIS_PASSWORD` | vacio | Password de Redis, si tiene. |
+| `REDIS_PASSWORD` | vacío | Password de Redis, si tiene. |
 
-## Como correr
+## Cómo correr
 
+```powershell
+.\mvnw.cmd spring-boot:run
 ```
-./mvnw spring-boot:run
-```
 
-Se registra en Eureka como `invoices`. Por detras del gateway la ruta publica es
+Se registra en Eureka como `invoices`. Por detrás del gateway la ruta pública es
 `/api/v1`.
 
 - Swagger UI: `http://localhost:8083/swagger-ui.html`
@@ -66,31 +80,84 @@ Se registra en Eureka como `invoices`. Por detras del gateway la ruta publica es
 
 ## Convenciones
 
-Sigue el mismo patron que `academic`:
+Sigue el patrón de `academic`:
 
-- Los controllers extienden `BaseController<Entidad, DTO, PagedFilter, Service>` y solo
-  agregan los endpoints de consulta por filtro. Los 6 CRUD vienen heredados.
-- Los services extienden `AbstractBaseService` y sobrescriben `create`, `update`,
-  `search`, `toDto` y `toEntity`.
-- Los repos son interfaces que extienden `BaseRepository` y usan **solo derived queries**.
-  No hay `Specification` ni `@Query`.
+- Los controllers extienden `BaseController<Entidad, DTO, PagedFilter, Service>`
+  y solo agregan endpoints de consulta por filtro.
+- Los services extienden `AbstractBaseService` y sobrescriben `create`,
+  `update`, `search`, `toDto` y `toEntity`.
+- Los repos son interfaces que extienden `BaseRepository` y usan derived
+  queries.
 - El mapeo entidad/DTO es MapStruct con `componentModel = "spring"`.
-- Las listas de consulta por filtro devuelven `Response<List<XDTO>>` sin paginar.
-- Los errores de negocio son `BusinessException` con un `errorCode` estable
-  (`ENTITY_NOT_FOUND`, `VALIDATION_ERROR`, `CONFLICT`, `STUDENT_NOT_FOUND`).
+- Las listas de consulta por filtro devuelven `Response<List<XDTO>>` sin
+  paginar.
+- Los errores de negocio son `BusinessException` con un `errorCode` estable.
 
-La unica desviacion respecto de `academic` es que `InvoiceService.create` y `.update`
-llevan `@Transactional`: guardar la cabecera, sus lineas y los totales recalculados es
-una sola unidad de trabajo y depende del `CascadeType.ALL` de `Invoice.details`.
+## Modelo fiscal
 
-### Dos desviaciones mas que conviene conocer
+### Precios con IVA incluido
 
-1. **Los errores siempre responden HTTP 400.** El `GlobalExceptionHandler` de `commons`
-   traduce toda `BusinessException` a 400 y no serializa el `errorCode` en el cuerpo, asi
-   que un recurso inexistente y un dato invalido se ven iguales. Es el mismo defecto que
-   tiene `academic`; queda pendiente corregirlo en `commons`.
-2. **No hay seguridad.** El servicio acepta cualquier llamada. La autorizacion tendria
-   que vivir en el gateway.
+`InvoiceDetail.unitPrice` es el precio de venta con IVA incluido.
+`subtotal = quantity * unitPrice`.
+
+```text
+sales5  = suma de subtotales GRAVADA_5
+sales10 = suma de subtotales GRAVADA_10
+exempt  = suma de subtotales EXENTA
+
+iva5    = round(sales5 / 21, 2)
+iva10   = round(sales10 / 11, 2)
+
+totalAmount = exempt + sales5 + sales10
+totalIva    = iva5 + iva10
+```
+
+**El IVA no se suma al total**: ya está incluido en los valores de venta.
+`totalIva` es informativo para la liquidación.
+
+### Conceptos del detalle
+
+Cada línea guarda:
+
+- `conceptType`: `MATRICULA`, `CUOTA`, `EXAMEN` u `OTRO`;
+- `conceptId`: el id de la inscripción o del examen, según el concepto;
+- `description`: texto legible para el comprobante;
+- `correspondingMonth`: `AAAA-MM` para las cuotas.
+
+El backend no valida que el `conceptId` exista en Academic: es una referencia
+externa. La UI es la que selecciona la inscripción.
+
+### Timbrados y numeración
+
+`TaxStamp` guarda:
+
+- `businessRuc`
+- `stampNumber`
+- `establishmentCode`
+- `expeditionPoint`
+- `validFrom`, `validUntil`
+- `nextSequence`
+
+Al crear una factura, el backend:
+
+1. bloquea el timbrado con `PESSIMISTIC_WRITE`;
+2. valida que `issueDate` esté dentro de la vigencia;
+3. valida que `issuerRuc` coincida con `businessRuc` del timbrado;
+4. toma `nextSequence`;
+5. genera `invoiceNumber = %03d-%03d-%07d`;
+6. incrementa `nextSequence`;
+7. guarda la factura y sus líneas en una sola transacción.
+
+El número nunca lo genera el cliente. El correlativo consumido no se reutiliza.
+
+### Inmutabilidad
+
+- Solo `PENDING` se puede editar.
+- En edición no cambian número, timbrado, snapshots del emisor ni `issueDate`.
+- `PAID` y `CANCELLED` son inmutables.
+- `DELETE` solo aplica a `PENDING` y es lógico. Las líneas también se marcan
+  como borradas.
+- A futuro, la UI debería usar `CANCELLED` en lugar de `DELETE`.
 
 ## Endpoints
 
@@ -98,66 +165,83 @@ una sola unidad de trabajo y depende del `CascadeType.ALL` de `Invoice.details`.
 
 Heredados de `BaseController`:
 
-| Metodo | Ruta |
+| Método | Ruta |
 |---|---|
 | `POST` | `/invoices` |
 | `PUT` | `/invoices/{id}` |
 | `GET` | `/invoices/{id}` |
 | `GET` | `/invoices/all` |
-| `GET` | `/invoices?page=0&size=10&sort=id&direction=ASC` |
+| `GET` | `/invoices?page=0&size=10&sort=issueDate&direction=DESC` |
 | `DELETE` | `/invoices/{id}` |
 
 Propios:
 
-| Metodo | Ruta |
+| Método | Ruta |
 |---|---|
 | `PATCH` | `/invoices/{id}/status?status=PAID` |
 | `GET` | `/invoices/by-student/{studentId}` |
 | `GET` | `/invoices/by-status?status=PAID` |
 | `GET` | `/invoices/by-sale-condition?condition=CREDITO` |
 | `GET` | `/invoices/by-number?invoiceNumber=001-001-0000123` |
-| `GET` | `/invoices/by-timbrado?timbrado=001` |
-| `GET` | `/invoices/by-tax-id?taxId=20123456789` |
+| `GET` | `/invoices/by-stamp-number?stampNumber=12345678` |
+| `GET` | `/invoices/by-customer-ruc?ruc=80012345-6` |
 | `GET` | `/invoices/by-date?date=2026-03-01` |
 | `GET` | `/invoices/by-date-range?from=2026-01-01&to=2026-03-31` |
-| `GET` | `/invoices/by-amount-range?min=100&max=500` |
-| `GET` | `/invoices/search-by-business-name?businessName=Perez` |
+| `GET` | `/invoices/by-amount-range?min=100000&max=500000` |
+| `GET` | `/invoices/search-by-customer-name?customerName=Perez` |
 
-### Lineas de detalle
+### Líneas de detalle
 
-Solo lectura: se escriben dentro de la factura, asi que este controller **no** extiende
-`BaseController`.
+Solo lectura:
 
-| Metodo | Ruta |
+| Método | Ruta |
 |---|---|
 | `GET` | `/invoice-details?page=0&size=10` |
 | `GET` | `/invoice-details/{id}` |
 | `GET` | `/invoice-details/by-invoice/{invoiceId}` |
 | `GET` | `/invoice-details/by-month?month=2026-03` |
-| `GET` | `/invoice-details/by-vat-rate?vatRate=10` |
+| `GET` | `/invoice-details/by-vat-type?vatType=GRAVADA_10` |
 | `GET` | `/invoice-details/by-concept?conceptType=MATRICULA&conceptId=12` |
-| `GET` | `/invoice-details/by-amount-range?min=100&max=500` |
+| `GET` | `/invoice-details/by-subtotal-range?min=100000&max=500000` |
 | `GET` | `/invoice-details/search-by-description?description=matricula` |
+
+### Timbrados
+
+| Método | Ruta | Rol |
+|---|---|---|
+| `GET` | `/tax-stamps` | ADMIN, SECRETARY |
+| `GET` | `/tax-stamps/all` | ADMIN, SECRETARY |
+| `GET` | `/tax-stamps/{id}` | ADMIN, SECRETARY |
+| `GET` | `/tax-stamps/valid?date=2026-03-01` | ADMIN, SECRETARY |
+| `POST` | `/tax-stamps` | ADMIN |
+| `PUT` | `/tax-stamps/{id}` | ADMIN |
+| `DELETE` | `/tax-stamps/{id}` | ADMIN |
 
 ## Reglas de negocio
 
 Al crear o actualizar una factura:
 
-1. `invoiceNumber` tiene que matchear `AAA-AAA-NNNNNNN` y no puede estar repetido.
-2. `studentId` es obligatorio. Se resuelve con un proxy de JPA, sin leer `students`.
-3. La factura necesita al menos una linea de detalle.
-4. `totalAmount` y `totalIva` se recalculan siempre desde las lineas; lo que mande el
-   cliente se ignora. El IVA de cada linea es `amount * vatRate / 100`.
-5. Las lineas de un `PUT` reemplazan por completo a las existentes.
+1. `taxStampId` es obligatorio al crear.
+2. `studentId` es opcional, pero la UI siempre lo envía; la factura queda
+   vinculada al alumno para filtrar.
+3. `customerName` y `customerRuc` son obligatorios. La factura solo acepta RUC,
+   no CI.
+3. `issuerName`, `issuerRuc`, `issuerActivity` e `issuerAddress` son
+   obligatorios al crear.
+4. La factura necesita al menos una línea.
+5. Cada línea necesita `quantity > 0`, `unitPrice >= 0` y `vatType`.
+6. `subtotal`, totales y numeración los calcula siempre el servidor.
+7. El timbrado debe estar vigente en `issueDate`.
+8. `issuerRuc` debe coincidir con el `businessRuc` del timbrado.
+9. Las líneas de un `PUT` reemplazan por completo a las existentes.
 
-Cambio de estado de pago: solo `PENDING` puede cambiar, y unicamente a `PAID` o
+Cambio de estado de pago: solo `PENDING` puede cambiar, y únicamente a `PAID` o
 `CANCELLED`. Los dos estados finales no tienen salida.
 
 ## OpenAPI
 
-`src/main/resources/openapi.yaml` documenta el contrato. **No genera codigo**: los
-controllers se escriben a mano y los DTOs vienen del JAR de `commons`. Se comparte este
-comportamiento con `academic`, donde el archivo es igualmente inerte.
+`src/main/resources/openapi.yaml` documenta el contrato. **No genera código**:
+los controllers se escriben a mano y los DTOs vienen del JAR de `commons`.
 
 ## Redis cache
 
@@ -165,11 +249,46 @@ El servicio cachea DTOs en Redis para proteger la base de datos. Cada
 microservicio usa Redis en `localhost:6379`, base `0`.
 
 - Claves: `<key-prefix>:<domain>:<id>`, por ejemplo `invoices:invoice:5`
-- Dominios y TTL: `cache.domains.*` en `src/main/resources/application.properties`
-  (`0` = persistente, cualquier otro valor = segundos)
-- Lecturas por id con `@Cacheable`; escrituras con `@CachePut` y `@CacheEvict`
-- Listas y paginas nunca se cachean completas: cada elemento se guarda por
+- Dominios y TTL: `cache.domains.*` en `application.properties`
+  (`invoice`, `invoicedetail`, `taxstamp`)
+- Lecturas por id con `@Cacheable`; escrituras con `@CacheEvict`
+- Listas y páginas nunca se cachean completas: cada elemento se guarda por
   separado con `DomainCache`
-- Cada operacion se loguea como `Cache GET|SET|DELETE <clave>` con HIT/MISS y TTL;
-  el nivel se controla con `logging.level.com.jerokysys.invoices.config.LoggingCache`
-- Si Redis no esta disponible, la request sigue contra PostgreSQL y el fallo se loguea
+- Si Redis no está disponible, la request sigue contra PostgreSQL y el fallo se
+  loguea
+
+## Migración
+
+El cambio de esquema está en `commons`:
+
+```powershell
+cd jerokysys-commons
+.\mvnw.cmd -Pliquibase process-resources liquibase:update
+```
+
+Changesets relevantes:
+
+- `18-create-tax-stamps`
+- `19-drop-legacy-invoices`
+- `20-create-invoices`
+- `21-create-invoice-details`
+- `22-seed-tax-stamps`
+
+El changeset `19` elimina las tablas de facturas anteriores. Fue una decisión
+deliberada porque los datos existentes eran de prueba.
+
+Después de migrar:
+
+1. reiniciar `invoices`;
+2. limpiar Redis (`invoices:*`) porque cambió la forma de los DTOs;
+3. verificar que `ddl-auto=validate` pase al arrancar.
+
+## Notas
+
+- `TaxStamp` es una entidad nueva en `commons`; todos los servicios que escanean
+  `com.jerokysys.commons.domain.entity` la validan al arrancar. Migrar antes de
+  reiniciar cualquier servicio.
+- El `GlobalExceptionHandler` de `commons` responde HTTP 400 para toda
+  `BusinessException`, incluso cuando el error de negocio sería 404 o 409.
+- La UI actual todavía usa el contrato anterior. Queda para la próxima
+  iteración.

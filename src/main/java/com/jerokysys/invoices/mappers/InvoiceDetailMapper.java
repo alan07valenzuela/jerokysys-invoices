@@ -21,6 +21,7 @@ public interface InvoiceDetailMapper {
 
     @Mapping(target = "id", ignore = true)
     @Mapping(target = "invoice", ignore = true)
+    @Mapping(target = "subtotal", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "active", ignore = true)
     @Mapping(target = "deleted", ignore = true)
@@ -29,6 +30,7 @@ public interface InvoiceDetailMapper {
     @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
     @Mapping(target = "id", ignore = true)
     @Mapping(target = "invoice", ignore = true)
+    @Mapping(target = "subtotal", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "active", ignore = true)
     @Mapping(target = "deleted", ignore = true)

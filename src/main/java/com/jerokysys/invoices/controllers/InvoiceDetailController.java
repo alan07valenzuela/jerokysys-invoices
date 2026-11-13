@@ -54,9 +54,9 @@ public class InvoiceDetailController {
         return Response.success(invoiceDetailService.getByCorrespondingMonth(month));
     }
 
-    @GetMapping("/by-vat-rate")
-    public Response<List<InvoiceDetailDTO>> getByVatRate(@RequestParam Integer vatRate) {
-        return Response.success(invoiceDetailService.getByVatRate(vatRate));
+    @GetMapping("/by-vat-type")
+    public Response<List<InvoiceDetailDTO>> getByVatType(@RequestParam String vatType) {
+        return Response.success(invoiceDetailService.getByVatType(vatType));
     }
 
     @GetMapping("/by-concept")
@@ -66,11 +66,11 @@ public class InvoiceDetailController {
         return Response.success(invoiceDetailService.getByConcept(conceptType, conceptId));
     }
 
-    @GetMapping("/by-amount-range")
-    public Response<List<InvoiceDetailDTO>> getByAmountRange(
+    @GetMapping("/by-subtotal-range")
+    public Response<List<InvoiceDetailDTO>> getBySubtotalRange(
             @RequestParam BigDecimal min,
             @RequestParam BigDecimal max) {
-        return Response.success(invoiceDetailService.getByAmountRange(min, max));
+        return Response.success(invoiceDetailService.getBySubtotalRange(min, max));
     }
 
     @GetMapping("/search-by-description")
