@@ -2,7 +2,9 @@ package com.jerokysys.invoices;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
+import org.springframework.boot.web.servlet.support.SpringBootServletInitializer;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 
@@ -13,7 +15,12 @@ import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 @EntityScan("com.jerokysys.commons.domain.entity")
 @EnableDiscoveryClient
 @EnableCaching
-public class InvoicesApplication {
+public class InvoicesApplication extends SpringBootServletInitializer {
+
+    @Override
+    protected SpringApplicationBuilder configure(SpringApplicationBuilder application) {
+        return application.sources(InvoicesApplication.class);
+    }
 
     public static void main(String[] args) {
         SpringApplication.run(InvoicesApplication.class, args);
